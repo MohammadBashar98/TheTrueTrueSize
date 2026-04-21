@@ -1,0 +1,285 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-sans); background: transparent; }
+#app { display: flex; flex-direction: column; height: 600px; }
+#toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; background: var(--color-background-primary);
+  border-bottom: 0.5px solid var(--color-border-tertiary);
+  flex-wrap: wrap;
+}
+#toolbar h2 { font-size: 14px; font-weight: 500; color: var(--color-text-primary); white-space: nowrap; }
+#search-wrap { position: relative; flex: 1; min-width: 160px; }
+#country-input {
+  width: 100%; padding: 6px 10px; font-size: 13px;
+  border: 0.5px solid var(--color-border-secondary);
+  border-radius: var(--border-radius-md); background: var(--color-background-secondary);
+  color: var(--color-text-primary); outline: none;
+}
+#country-input:focus { border-color: var(--color-border-primary); }
+#suggestions {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 9999;
+  background: var(--color-background-primary); border: 0.5px solid var(--color-border-secondary);
+  border-radius: var(--border-radius-md); max-height: 200px; overflow-y: auto;
+  display: none;
+}
+.sug-item { padding: 7px 10px; font-size: 13px; cursor: pointer; color: var(--color-text-primary); }
+.sug-item:hover { background: var(--color-background-secondary); }
+#add-btn {
+  padding: 6px 14px; font-size: 13px; font-weight: 500;
+  border: 0.5px solid var(--color-border-secondary);
+  border-radius: var(--border-radius-md); cursor: pointer;
+  background: var(--color-background-primary); color: var(--color-text-primary);
+  white-space: nowrap;
+}
+#add-btn:hover { background: var(--color-background-secondary); }
+#chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; background: var(--color-background-primary); border-bottom: 0.5px solid var(--color-border-tertiary); min-height: 40px; }
+.chip {
+  display: flex; align-items: center; gap: 6px; padding: 4px 10px;
+  border-radius: 99px; font-size: 12px; font-weight: 500; cursor: default;
+  border: 1px solid transparent;
+}
+.chip-remove { cursor: pointer; font-size: 14px; line-height: 1; opacity: 0.7; }
+.chip-remove:hover { opacity: 1; }
+#map { flex: 1; z-index: 1; }
+#info { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 1000; font-size: 12px; color: var(--color-text-secondary); background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); padding: 5px 12px; pointer-events: none; }
+</style>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+<div id="app">
+  <div id="toolbar">
+    <h2>True Size</h2>
+    <div id="search-wrap">
+      <input id="country-input" type="text" placeholder="Search country or continent…" autocomplete="off" />
+      <div id="suggestions"></div>
+    </div>
+    <button id="add-btn">+ Add</button>
+  </div>
+  <div id="chips"></div>
+  <div style="position:relative;flex:1;">
+    <div id="map"></div>
+    <div id="info">Drag shapes to compare sizes accurately</div>
+  </div>
+</div>
+
+<script>
+const COLORS = [
+  { bg: '#B5D4F4', border: '#185FA5', text: '#042C53' },
+  { bg: '#F5C4B3', border: '#993C1D', text: '#4A1B0C' },
+  { bg: '#9FE1CB', border: '#0F6E56', text: '#04342C' },
+  { bg: '#FAC775', border: '#854F0B', text: '#412402' },
+  { bg: '#F4C0D1', border: '#993556', text: '#4B1528' },
+  { bg: '#C0DD97', border: '#3B6D11', text: '#173404' },
+  { bg: '#CECBF6', border: '#534AB7', text: '#26215C' },
+];
+
+const COUNTRIES = [
+  "Afghanistan","Albania","Algeria","Andorra","Angola","Antigua and Barbuda","Argentina","Armenia","Australia","Austria","Azerbaijan",
+  "Bahamas","Bahrain","Bangladesh","Barbados","Belarus","Belgium","Belize","Benin","Bhutan","Bolivia","Bosnia and Herzegovina",
+  "Botswana","Brazil","Brunei","Bulgaria","Burkina Faso","Burundi","Cabo Verde","Cambodia","Cameroon","Canada","Central African Republic",
+  "Chad","Chile","China","Colombia","Comoros","Congo","Costa Rica","Croatia","Cuba","Cyprus","Czech Republic","Denmark","Djibouti",
+  "Dominica","Dominican Republic","Ecuador","Egypt","El Salvador","Equatorial Guinea","Eritrea","Estonia","Eswatini","Ethiopia",
+  "Fiji","Finland","France","Gabon","Gambia","Georgia","Germany","Ghana","Greece","Grenada","Guatemala","Guinea","Guinea-Bissau",
+  "Guyana","Haiti","Honduras","Hungary","Iceland","India","Indonesia","Iran","Iraq","Ireland","Israel","Italy","Jamaica","Japan",
+  "Jordan","Kazakhstan","Kenya","Kiribati","Kuwait","Kyrgyzstan","Laos","Latvia","Lebanon","Lesotho","Liberia","Libya","Liechtenstein",
+  "Lithuania","Luxembourg","Madagascar","Malawi","Malaysia","Maldives","Mali","Malta","Marshall Islands","Mauritania","Mauritius",
+  "Mexico","Micronesia","Moldova","Monaco","Mongolia","Montenegro","Morocco","Mozambique","Myanmar","Namibia","Nauru","Nepal",
+  "Netherlands","New Zealand","Nicaragua","Niger","Nigeria","North Korea","North Macedonia","Norway","Oman","Pakistan","Palau",
+  "Panama","Papua New Guinea","Paraguay","Peru","Philippines","Poland","Portugal","Qatar","Romania","Russia","Rwanda",
+  "Saint Kitts and Nevis","Saint Lucia","Saint Vincent and the Grenadines","Samoa","San Marino","Sao Tome and Principe",
+  "Saudi Arabia","Senegal","Serbia","Seychelles","Sierra Leone","Singapore","Slovakia","Slovenia","Solomon Islands","Somalia",
+  "South Africa","South Korea","South Sudan","Spain","Sri Lanka","Sudan","Suriname","Sweden","Switzerland","Syria","Taiwan",
+  "Tajikistan","Tanzania","Thailand","Timor-Leste","Togo","Tonga","Trinidad and Tobago","Tunisia","Turkey","Turkmenistan",
+  "Tuvalu","Uganda","Ukraine","United Arab Emirates","United Kingdom","United States","Uruguay","Uzbekistan","Vanuatu",
+  "Vatican City","Venezuela","Vietnam","Yemen","Zambia","Zimbabwe",
+  "Africa","Antarctica","Asia","Europe","North America","Oceania","South America"
+];
+
+const GEO_URL = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
+const TOPO_URL = "https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js";
+
+const map = L.map('map', { zoomControl: true, attributionControl: false }).setView([20, 0], 2);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map);
+
+let allFeatures = [];
+let overlays = [];
+let colorIdx = 0;
+
+async function loadGeoData() {
+  const [_, topoRes] = await Promise.all([
+    new Promise(res => {
+      const s = document.createElement('script');
+      s.src = TOPO_URL;
+      s.onload = res;
+      document.head.appendChild(s);
+    }),
+    fetch(GEO_URL).then(r => r.json())
+  ]);
+  const countries = topojson.feature(topoRes, topoRes.objects.countries);
+  allFeatures = countries.features;
+}
+
+const CONTINENT_CODES = {
+  "Africa": [12,24,72,108,120,132,140,148,174,175,178,180,204,226,231,232,262,266,270,288,324,328,336,404,426,430,434,450,454,466,478,480,504,508,516,562,566,624,630,646,678,686,694,706,710,716,728,729,732,768,788,800,818,834,854,894],
+  "Asia": [4,50,64,96,116,144,156,158,196,268,356,360,364,368,376,392,400,398,408,410,414,417,418,422,458,462,496,104,524,512,586,630,608,634,682,703,702,760,762,764,626,792,795,860,704,887,887],
+  "Europe": [8,20,40,56,70,100,112,191,196,203,208,233,246,250,276,300,348,372,380,428,438,440,442,470,492,499,528,578,616,620,642,643,674,688,703,705,724,752,756,804,826,336,831],
+  "North America": [84,124,170,188,192,214,222,320,332,340,388,484,558,591,630,780,840],
+  "South America": [32,68,76,152,170,218,238,328,600,604,740,858,862],
+  "Oceania": [36,242,296,584,583,520,540,554,585,598,882,90,776,798,548],
+  "Antarctica": [10]
+};
+
+function getFeaturesByName(name) {
+  const upper = name.toUpperCase();
+  if (CONTINENT_CODES[name]) {
+    const codes = CONTINENT_CODES[name];
+    return allFeatures.filter(f => codes.includes(+f.id));
+  }
+  return allFeatures.filter(f => {
+    const props = f.properties;
+    return (props.name && props.name.toUpperCase() === upper) ||
+           (props.NAME && props.NAME.toUpperCase() === upper) ||
+           (props.ADMIN && props.ADMIN.toUpperCase() === upper);
+  });
+}
+
+function featureBounds(features) {
+  let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+  features.forEach(f => {
+    const coords = [];
+    const collect = (c) => {
+      if (typeof c[0] === 'number') coords.push(c);
+      else c.forEach(collect);
+    };
+    collect(f.geometry.coordinates);
+    coords.forEach(([lng, lat]) => {
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+      if (lng < minLng) minLng = lng;
+      if (lng > maxLng) maxLng = lng;
+    });
+  });
+  return { minLat, maxLat, minLng, maxLng, centerLat: (minLat+maxLat)/2, centerLng: (minLng+maxLng)/2 };
+}
+
+function shiftFeature(feature, dLat, dLng) {
+  const shiftCoords = (c) => {
+    if (typeof c[0] === 'number') return [c[0] + dLng, c[1] + dLat];
+    return c.map(shiftCoords);
+  };
+  return {
+    ...feature,
+    geometry: { ...feature.geometry, coordinates: shiftCoords(feature.geometry.coordinates) }
+  };
+}
+
+function addOverlay(name) {
+  const features = getFeaturesByName(name);
+  if (!features.length) { alert('Country/region not found: ' + name); return; }
+
+  const color = COLORS[colorIdx % COLORS.length];
+  colorIdx++;
+
+  const b = featureBounds(features);
+  const mapCenter = map.getCenter();
+  const dLat = mapCenter.lat - b.centerLat;
+  const dLng = mapCenter.lng - b.centerLng;
+
+  let currentDLat = dLat, currentDLng = dLng;
+
+  const geojsonData = {
+    type: 'FeatureCollection',
+    features: features.map(f => shiftFeature(f, dLat, dLng))
+  };
+
+  const layer = L.geoJSON(geojsonData, {
+    style: { color: color.border, fillColor: color.bg, fillOpacity: 0.55, weight: 1.5 }
+  });
+  layer.addTo(map);
+
+  const chip = document.createElement('div');
+  chip.className = 'chip';
+  chip.style.background = color.bg;
+  chip.style.borderColor = color.border;
+  chip.style.color = color.text;
+  chip.innerHTML = `<span>${name}</span><span class="chip-remove">×</span>`;
+  document.getElementById('chips').appendChild(chip);
+
+  let isDragging = false, startLatLng = null, startDLat = 0, startDLng = 0;
+
+  layer.on('mousedown', function(e) {
+    isDragging = true;
+    startLatLng = e.latlng;
+    startDLat = currentDLat;
+    startDLng = currentDLng;
+    map.dragging.disable();
+    e.originalEvent.preventDefault();
+  });
+
+  map.on('mousemove', function(e) {
+    if (!isDragging) return;
+    const dLat2 = e.latlng.lat - startLatLng.lat;
+    const dLng2 = e.latlng.lng - startLatLng.lng;
+    currentDLat = startDLat + dLat2;
+    currentDLng = startDLng + dLng2;
+    layer.clearLayers();
+    layer.addData({
+      type: 'FeatureCollection',
+      features: features.map(f => shiftFeature(f, currentDLat, currentDLng))
+    });
+  });
+
+  map.on('mouseup', function() {
+    if (isDragging) { isDragging = false; map.dragging.enable(); }
+  });
+
+  const overlay = { name, layer, chip };
+  overlays.push(overlay);
+
+  chip.querySelector('.chip-remove').addEventListener('click', () => {
+    map.removeLayer(layer);
+    chip.remove();
+    overlays = overlays.filter(o => o !== overlay);
+  });
+}
+
+const input = document.getElementById('country-input');
+const sugBox = document.getElementById('suggestions');
+
+function showSuggestions(val) {
+  const q = val.trim().toLowerCase();
+  sugBox.innerHTML = '';
+  if (!q) { sugBox.style.display = 'none'; return; }
+  const matches = COUNTRIES.filter(c => c.toLowerCase().includes(q)).slice(0, 10);
+  if (!matches.length) { sugBox.style.display = 'none'; return; }
+  matches.forEach(m => {
+    const d = document.createElement('div');
+    d.className = 'sug-item';
+    d.textContent = m;
+    d.addEventListener('mousedown', e => { e.preventDefault(); input.value = m; sugBox.style.display = 'none'; });
+    sugBox.appendChild(d);
+  });
+  sugBox.style.display = 'block';
+}
+
+input.addEventListener('input', () => showSuggestions(input.value));
+input.addEventListener('blur', () => setTimeout(() => sugBox.style.display = 'none', 150));
+input.addEventListener('keydown', e => { if (e.key === 'Enter') { sugBox.style.display = 'none'; doAdd(); } });
+
+document.getElementById('add-btn').addEventListener('click', doAdd);
+
+function doAdd() {
+  const val = input.value.trim();
+  if (!val) return;
+  addOverlay(val);
+  input.value = '';
+}
+
+loadGeoData().then(() => {
+  addOverlay('United States');
+  addOverlay('India');
+});
+</script>
