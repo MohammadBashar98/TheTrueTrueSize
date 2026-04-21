@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>True Size — Compare Countries</title>
+
+<!-- Leaflet (free, no API key) -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<!-- TopoJSON decoder -->
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
+
+<style>
+  /* ── Design direction: dark cartographic / observatory aesthetic ──
+     Deep navy/charcoal base, warm parchment accents, mono type for coords.
+     Feels like a serious geographic tool, not a toy. */
+
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Playfair+Display:wght@500;700&family=DM+Sans:wght@300;400;500&display=swap');
+
+  :root {
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --surface2:  #1c2230;
+    --border:    #2a3347;
+    --border2:   #3d4f6b;
+    --text:      #e8eaf0;
+    --muted:     #7a8aa0;
+    --accent:    #c8a96e;   /* warm gold */
+    --accent2:   #5b8dd9;   /* cool blue */
+    --danger:    #e07070;
+    --radius:    6px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; }
+
+  /* ── Layout ── */
+  #shell { display: flex; flex-direction: column; height: 100vh; }
+
+  /* ── Header ── */
+  #header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 10px 18px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    z-index: 1000;
+  }
+  #logo {
+    font-family: 'Playfair Display', serif;
+    font-size: 17px; font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  #logo span { color: var(--muted); font-weight: 500; font-size: 14px; }
+
+  /* Search */
+  #search-wrap { position: relative; flex: 1; max-width: 340px; }
+  #search-input {
+    width: 100%; padding: 8px 36px 8px 12px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text);
+    font-family: 'DM Sans', sans-serif; font-size: 14px;
+    outline: none; transition: border-color .15s;
+  }
+  #search-input::placeholder { color: var(--muted); }
+  #search-input:focus { border-color: var(--accent2); }
+  #search-icon {
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    color: var(--muted); pointer-events: none; font-size: 15px;
+  }
+  #suggestions {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 9999;
+    background: var(--surface); border: 1px solid var(--border2);
+    border-radius: var(--radius); max-height: 220px; overflow-y: auto;
+    display: none; box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+  .sug-item {
+    padding: 9px 14px; font-size: 13px; cursor: pointer;
+    color: var(--text); display: flex; align-items: center; gap: 8px;
+    transition: background .1s;
+  }
+  .sug-item:hover { background: var(--surface2); }
+  .sug-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .sug-type { font-size: 11px; color: var(--muted); margin-left: auto; }
+
+  #add-btn {
+    padding: 8px 16px; font-size: 13px; font-weight: 500;
+    background: var(--accent); color: #0d1117;
+    border: none; border-radius: var(--radius); cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+    transition: opacity .15s, transform .1s;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  #add-btn:hover { opacity: 0.88; }
+  #add-btn:active { transform: scale(0.97); }
+
+  #clear-btn {
+    padding: 8px 12px; font-size: 12px; font-weight: 400;
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    cursor: pointer; font-family: 'DM Sans', sans-serif;
+    transition: color .15s, border-color .15s;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  #clear-btn:hover { color: var(--danger); border-color: var(--danger); }
+
+  /* ── Chips bar ── */
+  #chips-bar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+    padding: 8px 18px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    min-height: 42px; flex-shrink: 0;
+  }
+  #chips-bar:empty::before {
+    content: 'Search for a country or continent above and click Add';
+    color: var(--muted); font-size: 12px; font-style: italic;
+  }
+  .chip {
+    display: flex; align-items: center; gap: 7px;
+    padding: 4px 10px 4px 8px;
+    border-radius: 99px; font-size: 12px; font-weight: 500;
+    border: 1px solid transparent; cursor: default;
+    font-family: 'DM Mono', monospace;
+    transition: opacity .15s;
+  }
+  .chip-swatch { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .chip-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip-area { font-size: 10px; opacity: 0.75; }
+  .chip-x {
+    cursor: pointer; font-size: 15px; line-height: 1; opacity: 0.6;
+    margin-left: 2px; transition: opacity .1s;
+  }
+  .chip-x:hover { opacity: 1; }
+
+  /* ── Map ── */
+  #map-wrap { flex: 1; position: relative; }
+  #map { width: 100%; height: 100%; }
+
+  /* Leaflet dark tile override */
+  .leaflet-tile { filter: brightness(0.6) saturate(0.5) hue-rotate(185deg); }
+
+  /* ── Status overlay ── */
+  #status {
+    position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+    z-index: 900; pointer-events: none;
+    background: rgba(13,17,23,0.85); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 6px 14px;
+    font-size: 12px; font-family: 'DM Mono', monospace; color: var(--muted);
+    backdrop-filter: blur(6px);
+    transition: opacity .3s;
+  }
+
+  /* ── Lat info panel ── */
+  #latpanel {
+    position: absolute; top: 12px; right: 12px; z-index: 900;
+    background: rgba(22,27,34,0.92); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 10px 14px; width: 180px;
+    font-family: 'DM Mono', monospace; font-size: 11px;
+    backdrop-filter: blur(6px);
+  }
+  #latpanel h4 {
+    font-family: 'DM Sans', sans-serif; font-size: 11px; font-weight: 500;
+    color: var(--muted); margin-bottom: 8px; letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .lat-row { display: flex; justify-content: space-between; margin-bottom: 4px; color: var(--text); }
+  .lat-row span:last-child { color: var(--accent); }
+
+  /* ── Loading overlay ── */
+  #loading {
+    position: fixed; inset: 0; background: var(--bg);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    z-index: 9999; gap: 16px;
+    transition: opacity .4s;
+  }
+  #loading.hidden { opacity: 0; pointer-events: none; }
+  #loading-title {
+    font-family: 'Playfair Display', serif; font-size: 28px;
+    color: var(--accent); letter-spacing: 0.04em;
+  }
+  #loading-sub { font-size: 13px; color: var(--muted); font-family: 'DM Mono', monospace; }
+  #loading-bar {
+    width: 200px; height: 2px; background: var(--border);
+    border-radius: 2px; overflow: hidden;
+  }
+  #loading-fill {
+    height: 100%; width: 0%; background: var(--accent);
+    border-radius: 2px; transition: width .4s ease;
+  }
+
+  /* ── Tooltip ── */
+  #tooltip {
+    position: absolute; pointer-events: none; z-index: 800;
+    background: rgba(22,27,34,0.95); border: 1px solid var(--border2);
+    border-radius: var(--radius); padding: 8px 12px;
+    font-size: 12px; font-family: 'DM Mono', monospace;
+    color: var(--text); display: none; white-space: nowrap;
+    backdrop-filter: blur(4px);
+  }
+  #tooltip strong { color: var(--accent); font-size: 13px; display: block; margin-bottom: 3px; }
+
+  /* Leaflet attribution dark */
+  .leaflet-control-attribution { background: rgba(13,17,23,0.7) !important; color: var(--muted) !important; }
+  .leaflet-control-attribution a { color: var(--accent2) !important; }
+  .leaflet-bar a { background: var(--surface) !important; color: var(--text) !important; border-color: var(--border) !important; }
+  .leaflet-bar a:hover { background: var(--surface2) !important; }
+
+  /* scrollbar */
+  #suggestions::-webkit-scrollbar { width: 4px; }
+  #suggestions::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<!-- Loading screen -->
+<div id="loading">
+  <div id="loading-title">True Size</div>
+  <div id="loading-sub">fetching world geometry…</div>
+  <div id="loading-bar"><div id="loading-fill"></div></div>
+</div>
+
+<div id="shell">
+  <div id="header">
+    <div id="logo">True Size <span>of…</span></div>
+
+    <div id="search-wrap">
+      <input id="search-input" type="text" placeholder="Country or continent…" autocomplete="off" spellcheck="false" />
+      <span id="search-icon">⌕</span>
+      <div id="suggestions"></div>
+    </div>
+
+    <button id="add-btn">+ Add</button>
+    <button id="clear-btn">Clear all</button>
+  </div>
+
+  <div id="chips-bar"></div>
+
+  <div id="map-wrap">
+    <div id="map"></div>
+    <div id="status">Drag any shape to compare sizes across latitudes</div>
+    <div id="latpanel">
+      <h4>Mercator scale</h4>
+      <div class="lat-row"><span>Cursor lat</span><span id="lp-lat">—</span></div>
+      <div class="lat-row"><span>Scale factor</span><span id="lp-scale">—</span></div>
+      <div class="lat-row"><span>Area inflation</span><span id="lp-inflate">—</span></div>
+    </div>
+    <div id="tooltip"></div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+//  PALETTE — 8 distinct colors, dark-friendly
+// ══════════════════════════════════════════════════════════════
+const PALETTE = [
+  { fill: '#4a9eff', stroke: '#1a6fd4', bg: 'rgba(74,158,255,0.12)', text: '#4a9eff' },
+  { fill: '#ff7055', stroke: '#cc4030', bg: 'rgba(255,112,85,0.12)',  text: '#ff7055' },
+  { fill: '#4ddb95', stroke: '#1da860', bg: 'rgba(77,219,149,0.12)', text: '#4ddb95' },
+  { fill: '#f0c040', stroke: '#c09010', bg: 'rgba(240,192,64,0.12)', text: '#f0c040' },
+  { fill: '#c07af0', stroke: '#9050c0', bg: 'rgba(192,122,240,0.12)',text: '#c07af0' },
+  { fill: '#ff9f40', stroke: '#d06000', bg: 'rgba(255,159,64,0.12)', text: '#ff9f40' },
+  { fill: '#40d4e0', stroke: '#0098a8', bg: 'rgba(64,212,224,0.12)', text: '#40d4e0' },
+  { fill: '#ff6fb0', stroke: '#cc3080', bg: 'rgba(255,111,176,0.12)',text: '#ff6fb0' },
+];
+let paletteIdx = 0;
+
+// ══════════════════════════════════════════════════════════════
+//  COUNTRY LIST (all 200+ countries + 7 continents)
+// ══════════════════════════════════════════════════════════════
+const COUNTRY_LIST = [
+  "Afghanistan","Albania","Algeria","Andorra","Angola","Antigua and Barbuda","Argentina","Armenia",
+  "Australia","Austria","Azerbaijan","Bahamas","Bahrain","Bangladesh","Barbados","Belarus","Belgium",
+  "Belize","Benin","Bhutan","Bolivia","Bosnia and Herzegovina","Botswana","Brazil","Brunei","Bulgaria",
+  "Burkina Faso","Burundi","Cabo Verde","Cambodia","Cameroon","Canada","Central African Republic","Chad",
+  "Chile","China","Colombia","Comoros","Congo","Costa Rica","Croatia","Cuba","Cyprus","Czech Republic",
+  "Denmark","Djibouti","Dominica","Dominican Republic","Ecuador","Egypt","El Salvador",
+  "Equatorial Guinea","Eritrea","Estonia","Eswatini","Ethiopia","Fiji","Finland","France","Gabon",
+  "Gambia","Georgia","Germany","Ghana","Greece","Grenada","Guatemala","Guinea","Guinea-Bissau","Guyana",
+  "Haiti","Honduras","Hungary","Iceland","India","Indonesia","Iran","Iraq","Ireland","Israel","Italy",
+  "Jamaica","Japan","Jordan","Kazakhstan","Kenya","Kiribati","Kuwait","Kyrgyzstan","Laos","Latvia",
+  "Lebanon","Lesotho","Liberia","Libya","Liechtenstein","Lithuania","Luxembourg","Madagascar","Malawi",
+  "Malaysia","Maldives","Mali","Malta","Marshall Islands","Mauritania","Mauritius","Mexico","Micronesia",
+  "Moldova","Monaco","Mongolia","Montenegro","Morocco","Mozambique","Myanmar","Namibia","Nauru","Nepal",
+  "Netherlands","New Zealand","Nicaragua","Niger","Nigeria","North Korea","North Macedonia","Norway",
+  "Oman","Pakistan","Palau","Panama","Papua New Guinea","Paraguay","Peru","Philippines","Poland",
+  "Portugal","Qatar","Romania","Russia","Rwanda","Saint Kitts and Nevis","Saint Lucia",
+  "Saint Vincent and the Grenadines","Samoa","San Marino","Sao Tome and Principe","Saudi Arabia",
+  "Senegal","Serbia","Seychelles","Sierra Leone","Singapore","Slovakia","Slovenia","Solomon Islands",
+  "Somalia","South Africa","South Korea","South Sudan","Spain","Sri Lanka","Sudan","Suriname","Sweden",
+  "Switzerland","Syria","Taiwan","Tajikistan","Tanzania","Thailand","Timor-Leste","Togo","Tonga",
+  "Trinidad and Tobago","Tunisia","Turkey","Turkmenistan","Tuvalu","Uganda","Ukraine",
+  "United Arab Emirates","United Kingdom","United States","Uruguay","Uzbekistan","Vanuatu",
+  "Venezuela","Vietnam","Yemen","Zambia","Zimbabwe",
+  // Continents
+  "Africa","Asia","Europe","North America","South America","Oceania","Antarctica"
+];
+
+// Continent → numeric ISO codes (Natural Earth dataset IDs)
+const CONTINENT_CODES = {
+  "Africa": [12,24,72,108,120,132,140,148,174,175,178,180,204,226,231,232,262,266,270,288,324,336,404,426,430,434,450,454,466,478,480,504,508,516,562,566,624,686,694,706,710,716,728,729,768,788,800,818,834,854,894],
+  "Asia": [4,50,64,96,116,144,156,268,356,360,364,368,376,392,398,400,408,410,414,417,418,422,458,462,496,104,524,512,586,608,634,682,703,702,760,762,764,626,792,795,860,704,887],
+  "Europe": [8,20,40,56,70,100,112,191,196,203,208,233,246,250,276,300,348,372,380,428,438,440,442,470,492,499,528,578,616,620,642,643,674,688,703,705,724,752,756,804,826,336],
+  "North America": [84,124,170,188,192,214,222,320,332,340,388,484,558,591,780,840],
+  "South America": [32,68,76,152,218,328,600,604,740,858,862],
+  "Oceania": [36,242,296,584,583,520,554,585,598,882,90,776,798,548],
+  "Antarctica": [10]
+};
+
+// Known areas in km² for display
+const AREAS = {
+  "Russia":17098242,"Canada":9984670,"United States":9372610,"China":9596960,"Brazil":8515767,
+  "Australia":7692024,"India":3287263,"Argentina":2780400,"Kazakhstan":2724900,"Algeria":2381741,
+  "Congo":2344858,"Saudi Arabia":2149690,"Mexico":1964375,"Indonesia":1904569,"Sudan":1861484,
+  "Libya":1759540,"Iran":1648195,"Mongolia":1564116,"Peru":1285216,"Chad":1284000,
+  "Niger":1267000,"Angola":1246700,"Mali":1240192,"South Africa":1219090,"Colombia":1141748,
+  "Ethiopia":1104300,"Bolivia":1098581,"Mauritania":1030700,"Egypt":1002450,"Tanzania":945087,
+  "Nigeria":923768,"Venezuela":912050,"Namibia":824292,"Mozambique":801590,"Pakistan":881913,
+  "Turkey":783562,"Chile":756102,"Zambia":752618,"Myanmar":676578,"Afghanistan":652230,
+  "South Sudan":619745,"France":643801,"Somalia":637657,"Central African Republic":622984,
+  "Ukraine":603550,"Madagascar":587041,"Botswana":581730,"Kenya":580367,"Yemen":527968,
+  "Thailand":513120,"Spain":505990,"Turkmenistan":488100,"Cameroon":475442,"Papua New Guinea":462840,
+  "Sweden":450295,"Uzbekistan":448978,"Iraq":438317,"Paraguay":406752,"Zimbabwe":390757,
+  "Japan":377915,"Germany":357114,"Congo":342000,"Finland":338145,"Malaysia":329847,
+  "Vietnam":331212,"Norway":323802,"Ivory Coast":322463,"Poland":312696,"Oman":309500,
+  "Italy":301340,"Philippines":300000,"Ecuador":283561,"Burkina Faso":274222,"New Zealand":270467,
+  "Gabon":267668,"Guinea":245857,"United Kingdom":242900,"Uganda":241550,"Ghana":238533,
+  "Romania":238397,"Laos":236800,"Guyana":214969,"Belarus":207600,"Kyrgyzstan":199951,
+  "Senegal":196722,"Syria":185180,"Cambodia":181035,"Uruguay":176215,"Suriname":163820,
+  "Tunisia":163610,"Bangladesh":147570,"Nepal":147181,"Tajikistan":143100,"Greece":131957,
+  "Nicaragua":130373,"North Korea":120538,"Malawi":118484,"Eritrea":117600,"Benin":112622,
+  "Honduras":112492,"Liberia":111369,"Bulgaria":110879,"Cuba":109884,"Guatemala":108889,
+  "Iceland":103000,"South Korea":100210,"Hungary":93028,"Jordan":89342,"Portugal":92212,
+  "Serbia":77474,"Azerbaijan":86600,"Austria":83871,"United Arab Emirates":83600,"Czech Republic":78866,
+  "Panama":75417,"Sierra Leone":71740,"Ireland":70273,"Georgia":69700,"Sri Lanka":65610,
+  "Lithuania":65300,"Latvia":64589,"Togo":56785,"Croatia":56594,"Bosnia and Herzegovina":51197,
+  "Costa Rica":51100,"Slovakia":49035,"Dominican Republic":48671,"Estonia":45228,"Denmark":43094,
+  "Netherlands":41543,"Switzerland":41285,"Bhutan":38394,"Guinea-Bissau":36125,"Taiwan":36193,
+  "Moldova":33846,"Belgium":30528,"Lesotho":30355,"Armenia":29743,"Solomon Islands":28896,
+  "Albania":28748,"Equatorial Guinea":28051,"Burundi":27830,"Haiti":27750,"Rwanda":26338,
+  "North Macedonia":25713,"Djibouti":23200,"Belize":22966,"El Salvador":21041,"Israel":20770,
+  "Slovenia":20273,"Fiji":18274,"Kuwait":17818,"Swaziland":17364,"Timor-Leste":14874,
+  "Montenegro":13812,"Bahamas":13943,"Vanuatu":12189,"Qatar":11586,"Gambia":11295,
+  "Jamaica":10991,"Kosovo":10887,"Lebanon":10452,"Cyprus":9251,"Brunei":5765,
+  "Trinidad and Tobago":5128,"Cape Verde":4033,"Samoa":2842,"Luxembourg":2586,
+  "Comoros":2235,"Mauritius":2040,"Sao Tome and Principe":964,"Kiribati":811,
+  "Bahrain":765,"Dominica":751,"Tonga":747,"Singapore":728,"Micronesia":702,
+  "Saint Lucia":616,"Palau":459,"Marshall Islands":181,"Maldives":298,
+  "Saint Kitts and Nevis":261,"Liechtenstein":160,"San Marino":61,"Tuvalu":26,
+  "Nauru":21,"Monaco":2,"Vatican City":0.44,
+  // Continents
+  "Africa":30370000,"Asia":44579000,"Europe":10530000,
+  "North America":24709000,"South America":17840000,"Oceania":8526000,"Antarctica":14000000
+};
+
+// ══════════════════════════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════════════════════════
+let allFeatures = [];   // decoded GeoJSON features from TopoJSON
+let overlays = [];      // { name, originalFeatures, currentDLat, currentDLng, layer, color, chip }
+let mapReady = false;
+
+// ══════════════════════════════════════════════════════════════
+//  MAP SETUP — OpenStreetMap tiles, no API key
+// ══════════════════════════════════════════════════════════════
+const map = L.map('map', {
+  center: [20, 10], zoom: 2,
+  zoomControl: true, attributionControl: true,
+  worldCopyJump: false,
+  maxBounds: [[-90, -Infinity], [90, Infinity]],
+});
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxZoom: 18,
+  subdomains: 'abc',
+}).addTo(map);
+
+// Track cursor for lat panel
+map.on('mousemove', (e) => {
+  const lat = e.latlng.lat;
+  const scale = 1 / Math.cos(lat * Math.PI / 180);
+  const inflate = (scale * scale).toFixed(2);
+  document.getElementById('lp-lat').textContent = lat.toFixed(1) + '°';
+  document.getElementById('lp-scale').textContent = scale.toFixed(2) + '×';
+  document.getElementById('lp-inflate').textContent = inflate + '×';
+});
+
+// ══════════════════════════════════════════════════════════════
+//  LOAD WORLD TOPOJSON (Natural Earth via jsdelivr — free)
+// ══════════════════════════════════════════════════════════════
+const TOPO_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
+
+// Country name lookup — Natural Earth numeric ID → name
+// We'll use a GeoJSON with names for search
+const NAMES_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
+
+// We need a separate name mapping. Use a known public source:
+const NAME_MAP_URL = 'https://cdn.jsdelivr.net/npm/visionscarto-world-atlas@0.1.0/world/110m.json';
+
+// Actually let's use a reliable combined source that has .name properties
+// We'll load natural-earth countries GeoJSON from a reliable public CDN
+const GEOJSON_URL = 'https://cdn.jsdelivr.net/npm/@geo-maps/countries-land-10km@0.6.0/map.geo.json';
+
+async function loadData() {
+  const fill = document.getElementById('loading-fill');
+  const sub  = document.getElementById('loading-sub');
+
+  try {
+    sub.textContent = 'loading world geometry…';
+    fill.style.width = '20%';
+
+    // Primary: world-atlas TopoJSON (reliable, small)
+    const res = await fetch(TOPO_URL);
+    if (!res.ok) throw new Error('fetch failed');
+    const topo = await res.json();
+
+    fill.style.width = '60%';
+    sub.textContent = 'decoding topology…';
+
+    // Decode TopoJSON → GeoJSON features
+    const collection = topojson.feature(topo, topo.objects.countries);
+    allFeatures = collection.features;
+
+    fill.style.width = '80%';
+    sub.textContent = 'loading country names…';
+
+    // Load a name lookup (country-name-by-numeric-code)
+    // world-atlas gives us numeric ISO codes; we need names.
+    // Fetch a small name map from a public endpoint.
+    await loadNameMap();
+
+    fill.style.width = '100%';
+    sub.textContent = 'ready';
+
+    await new Promise(r => setTimeout(r, 300));
+    document.getElementById('loading').classList.add('hidden');
+    mapReady = true;
+
+    // Add default countries
+    addOverlay('United States');
+    addOverlay('India');
+
+  } catch (err) {
+    sub.textContent = 'error: ' + err.message;
+    console.error(err);
+  }
+}
+
+// Name map: ISO numeric → country name
+let nameMap = {};
+
+async function loadNameMap() {
+  // Use restcountries as a lightweight name source
+  // or fall back to a bundled minimal map
+  try {
+    const r = await fetch('https://cdn.jsdelivr.net/npm/country-iso-3166@1.0.0/index.json');
+    if (r.ok) {
+      const data = await r.json();
+      // This package gives {code: name} but with alpha codes
+      // We'll use our own bundled numeric map instead
+    }
+  } catch(_) {}
+
+  // Bundled minimal ISO numeric → common name map (most important countries)
+  nameMap = {
+    4:"Afghanistan",8:"Albania",12:"Algeria",20:"Andorra",24:"Angola",28:"Antigua and Barbuda",
+    32:"Argentina",51:"Armenia",36:"Australia",40:"Austria",31:"Azerbaijan",44:"Bahamas",
+    48:"Bahrain",50:"Bangladesh",52:"Barbados",112:"Belarus",56:"Belgium",84:"Belize",
+    204:"Benin",64:"Bhutan",68:"Bolivia",70:"Bosnia and Herzegovina",72:"Botswana",76:"Brazil",
+    96:"Brunei",100:"Bulgaria",854:"Burkina Faso",108:"Burundi",132:"Cabo Verde",116:"Cambodia",
+    120:"Cameroon",124:"Canada",140:"Central African Republic",148:"Chad",152:"Chile",156:"China",
+    170:"Colombia",174:"Comoros",180:"Congo",188:"Costa Rica",191:"Croatia",192:"Cuba",
+    196:"Cyprus",203:"Czech Republic",208:"Denmark",262:"Djibouti",212:"Dominica",
+    214:"Dominican Republic",218:"Ecuador",818:"Egypt",222:"El Salvador",226:"Equatorial Guinea",
+    232:"Eritrea",233:"Estonia",748:"Eswatini",231:"Ethiopia",242:"Fiji",246:"Finland",
+    250:"France",266:"Gabon",270:"Gambia",268:"Georgia",276:"Germany",288:"Ghana",300:"Greece",
+    308:"Grenada",320:"Guatemala",324:"Guinea",624:"Guinea-Bissau",328:"Guyana",332:"Haiti",
+    340:"Honduras",348:"Hungary",352:"Iceland",356:"India",360:"Indonesia",364:"Iran",368:"Iraq",
+    372:"Ireland",376:"Israel",380:"Italy",388:"Jamaica",392:"Japan",400:"Jordan",398:"Kazakhstan",
+    404:"Kenya",296:"Kiribati",414:"Kuwait",417:"Kyrgyzstan",418:"Laos",428:"Latvia",
+    422:"Lebanon",426:"Lesotho",430:"Liberia",434:"Libya",438:"Liechtenstein",440:"Lithuania",
+    442:"Luxembourg",450:"Madagascar",454:"Malawi",458:"Malaysia",462:"Maldives",466:"Mali",
+    470:"Malta",584:"Marshall Islands",478:"Mauritania",480:"Mauritius",484:"Mexico",583:"Micronesia",
+    498:"Moldova",492:"Monaco",496:"Mongolia",499:"Montenegro",504:"Morocco",508:"Mozambique",
+    104:"Myanmar",516:"Namibia",520:"Nauru",524:"Nepal",528:"Netherlands",554:"New Zealand",
+    558:"Nicaragua",562:"Niger",566:"Nigeria",408:"North Korea",807:"North Macedonia",578:"Norway",
+    512:"Oman",586:"Pakistan",585:"Palau",591:"Panama",598:"Papua New Guinea",600:"Paraguay",
+    604:"Peru",608:"Philippines",616:"Poland",620:"Portugal",634:"Qatar",642:"Romania",
+    643:"Russia",646:"Rwanda",659:"Saint Kitts and Nevis",662:"Saint Lucia",
+    670:"Saint Vincent and the Grenadines",882:"Samoa",674:"San Marino",678:"Sao Tome and Principe",
+    682:"Saudi Arabia",686:"Senegal",688:"Serbia",690:"Seychelles",694:"Sierra Leone",
+    702:"Singapore",703:"Slovakia",705:"Slovenia",90:"Solomon Islands",706:"Somalia",
+    710:"South Africa",410:"South Korea",728:"South Sudan",724:"Spain",144:"Sri Lanka",
+    729:"Sudan",740:"Suriname",752:"Sweden",756:"Switzerland",760:"Syria",158:"Taiwan",
+    762:"Tajikistan",834:"Tanzania",764:"Thailand",626:"Timor-Leste",768:"Togo",776:"Tonga",
+    780:"Trinidad and Tobago",788:"Tunisia",792:"Turkey",795:"Turkmenistan",798:"Tuvalu",
+    800:"Uganda",804:"Ukraine",784:"United Arab Emirates",826:"United Kingdom",840:"United States",
+    858:"Uruguay",860:"Uzbekistan",548:"Vanuatu",336:"Vatican City",862:"Venezuela",
+    704:"Vietnam",887:"Yemen",894:"Zambia",716:"Zimbabwe",
+    10:"Antarctica"
+  };
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MERCATOR RESCALING MATH
+//  The core of the whole app.
+//
+//  The Mercator scale factor at latitude φ is: k(φ) = 1/cos(φ)
+//
+//  When we drag a shape from original centroid latitude φ₀ to
+//  new centroid latitude φ₁, each point's offset from the centroid
+//  must be rescaled so the shape renders at its TRUE angular size
+//  (not inflated by the new latitude's Mercator distortion).
+//
+//  For longitude offsets: scale by cos(φ₀)/cos(φ₁)
+//  For latitude offsets:  scale by mercatorY'(φ₀)/mercatorY'(φ₁)
+//  where mercatorY'(φ) = 1/cos(φ) (derivative of ln·tan·...)
+//
+//  This means both axes scale by the same ratio: cos(φ₀)/cos(φ₁)
+//  which is the ratio of the two Mercator scale factors.
+// ══════════════════════════════════════════════════════════════
+
+const DEG = Math.PI / 180;
+
+function centroidOfFeatures(features) {
+  // Simple arithmetic mean of all polygon vertices
+  let sumLat = 0, sumLng = 0, count = 0;
+  features.forEach(f => {
+    walkCoords(f.geometry.coordinates, ([lng, lat]) => {
+      sumLat += lat; sumLng += lng; count++;
+    });
+  });
+  return { lat: sumLat / count, lng: sumLng / count };
+}
+
+function walkCoords(coords, cb) {
+  if (typeof coords[0] === 'number') { cb(coords); return; }
+  coords.forEach(c => walkCoords(c, cb));
+}
+
+// Reproject all features: translate centroid to (newLat, newLng),
+// then rescale each vertex offset to counteract Mercator distortion.
+function reprojectFeatures(features, origCentroid, newCentLat, newCentLng) {
+  const φ0 = origCentroid.lat * DEG;
+  const φ1 = newCentLat * DEG;
+
+  // The rescale ratio: how much bigger/smaller each offset becomes
+  // cos(φ₀)/cos(φ₁):
+  //   - Moving toward poles (φ₁ > φ₀): cos decreases, ratio < 1 → shape SHRINKS
+  //   - Moving toward equator (φ₁ < φ₀): cos increases, ratio > 1 → shape GROWS
+  // This is exactly what we want: the true angular size is constant,
+  // but the Mercator rendering compensates.
+  const cosRatio = Math.cos(φ0) / Math.cos(φ1);
+
+  const dLat = newCentLat - origCentroid.lat;
+  const dLng = newCentLng - origCentroid.lng;
+
+  return features.map(f => {
+    const newCoords = transformCoords(f.geometry.coordinates, origCentroid, dLat, dLng, cosRatio);
+    return {
+      ...f,
+      geometry: { ...f.geometry, coordinates: newCoords }
+    };
+  });
+}
+
+function transformCoords(coords, center, dLat, dLng, ratio) {
+  if (typeof coords[0] === 'number') {
+    const [lng, lat] = coords;
+    // Offset from original centroid
+    const offLat = lat - center.lat;
+    const offLng = lng - center.lng;
+    // Scale the offset by the ratio, then translate to new center
+    const newLat = (center.lat + dLat) + offLat * ratio;
+    const newLng = (center.lng + dLng) + offLng * ratio;
+    return [newLng, newLat];
+  }
+  return coords.map(c => transformCoords(c, center, dLat, dLng, ratio));
+}
+
+// ══════════════════════════════════════════════════════════════
+//  FEATURE LOOKUP
+// ══════════════════════════════════════════════════════════════
+function findFeaturesByName(name) {
+  const upper = name.trim().toUpperCase();
+
+  // Check continents first
+  if (CONTINENT_CODES[name]) {
+    const codes = CONTINENT_CODES[name];
+    return allFeatures.filter(f => codes.includes(+f.id));
+  }
+
+  // Search by name map
+  for (const [id, n] of Object.entries(nameMap)) {
+    if (n.toUpperCase() === upper) {
+      const feat = allFeatures.find(f => +f.id === +id);
+      if (feat) return [feat];
+    }
+  }
+
+  // Fuzzy fallback on name map
+  for (const [id, n] of Object.entries(nameMap)) {
+    if (n.toUpperCase().includes(upper) || upper.includes(n.toUpperCase())) {
+      const feat = allFeatures.find(f => +f.id === +id);
+      if (feat) return [feat];
+    }
+  }
+
+  return [];
+}
+
+function featureCentroid(features) {
+  return centroidOfFeatures(features);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ADD OVERLAY
+// ══════════════════════════════════════════════════════════════
+function addOverlay(name) {
+  if (!mapReady) return;
+
+  const originalFeatures = findFeaturesByName(name);
+  if (!originalFeatures.length) {
+    showStatus('Country not found: ' + name, 3000);
+    return;
+  }
+
+  // Avoid duplicates
+  if (overlays.find(o => o.name.toLowerCase() === name.toLowerCase())) {
+    showStatus(name + ' is already on the map', 2000);
+    return;
+  }
+
+  if (overlays.length >= 8) {
+    showStatus('Maximum 8 countries at a time', 2000);
+    return;
+  }
+
+  const color = PALETTE[paletteIdx % PALETTE.length];
+  paletteIdx++;
+
+  const origCentroid = featureCentroid(originalFeatures);
+  const mapCenter = map.getCenter();
+
+  // Initial position: place centroid at current map center
+  const initLat = mapCenter.lat;
+  const initLng = mapCenter.lng;
+
+  const area = AREAS[name] ? formatArea(AREAS[name]) : '?';
+
+  // Create Leaflet GeoJSON layer
+  const geojsonData = {
+    type: 'FeatureCollection',
+    features: reprojectFeatures(originalFeatures, origCentroid, initLat, initLng)
+  };
+
+  const layer = L.geoJSON(geojsonData, {
+    style: {
+      color: color.stroke,
+      fillColor: color.fill,
+      fillOpacity: 0.28,
+      weight: 1.8,
+      opacity: 0.9,
+    }
+  }).addTo(map);
+
+  // Build chip
+  const chip = document.createElement('div');
+  chip.className = 'chip';
+  chip.style.cssText = `background:${color.bg};border-color:${color.fill}40;color:${color.text}`;
+  chip.innerHTML = `
+    <span class="chip-swatch" style="background:${color.fill}"></span>
+    <span class="chip-name">${name}</span>
+    <span class="chip-area">${area} km²</span>
+    <span class="chip-x" title="Remove">×</span>
+  `;
+  document.getElementById('chips-bar').appendChild(chip);
+
+  const overlay = {
+    name, originalFeatures, origCentroid,
+    currentLat: initLat, currentLng: initLng,
+    layer, color, chip
+  };
+  overlays.push(overlay);
+
+  // ── Drag logic ──
+  let isDragging = false;
+  let dragStartLL = null;
+  let dragStartCentLat = 0;
+  let dragStartCentLng = 0;
+
+  layer.on('mousedown', (e) => {
+    isDragging = true;
+    dragStartLL = e.latlng;
+    dragStartCentLat = overlay.currentLat;
+    dragStartCentLng = overlay.currentLng;
+    map.dragging.disable();
+    document.body.style.cursor = 'grabbing';
+    e.originalEvent.preventDefault();
+    e.originalEvent.stopPropagation();
+  });
+
+  layer.on('mouseover', (e) => {
+    if (!isDragging) {
+      layer.setStyle({ fillOpacity: 0.42, weight: 2.4 });
+      showTooltip(e, name, area, overlay.currentLat);
+    }
+  });
+
+  layer.on('mouseout', () => {
+    if (!isDragging) {
+      layer.setStyle({ fillOpacity: 0.28, weight: 1.8 });
+      hideTooltip();
+    }
+  });
+
+  layer.on('mousemove', (e) => {
+    if (!isDragging) updateTooltipPos(e);
+  });
+
+  map.on('mousemove', (e) => {
+    if (!isDragging) return;
+
+    const deltaLat = e.latlng.lat - dragStartLL.lat;
+    const deltaLng = e.latlng.lng - dragStartLL.lng;
+
+    let newCentLat = dragStartCentLat + deltaLat;
+    let newCentLng = dragStartCentLng + deltaLng;
+
+    // Clamp latitude to Mercator valid range
+    newCentLat = Math.max(-82, Math.min(82, newCentLat));
+
+    overlay.currentLat = newCentLat;
+    overlay.currentLng = newCentLng;
+
+    // Reproject features to new centroid position with Mercator correction
+    const newFeatures = reprojectFeatures(
+      overlay.originalFeatures, overlay.origCentroid,
+      newCentLat, newCentLng
+    );
+
+    // Update Leaflet layer
+    layer.clearLayers();
+    layer.addData({ type: 'FeatureCollection', features: newFeatures });
+  });
+
+  map.on('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      map.dragging.enable();
+      document.body.style.cursor = '';
+      layer.setStyle({ fillOpacity: 0.28, weight: 1.8 });
+    }
+  });
+
+  // Right-click to remove
+  layer.on('contextmenu', (e) => {
+    removeOverlay(overlay);
+    e.originalEvent.preventDefault();
+  });
+
+  // Chip remove button
+  chip.querySelector('.chip-x').addEventListener('click', () => removeOverlay(overlay));
+
+  showStatus(`${name} added — drag to compare sizes`, 2500);
+}
+
+function removeOverlay(overlay) {
+  map.removeLayer(overlay.layer);
+  overlay.chip.remove();
+  overlays = overlays.filter(o => o !== overlay);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  UI HELPERS
+// ══════════════════════════════════════════════════════════════
+function formatArea(km2) {
+  if (km2 >= 1000000) return (km2/1000000).toFixed(1) + 'M';
+  if (km2 >= 1000) return (km2/1000).toFixed(0) + 'K';
+  return km2.toString();
+}
+
+let statusTimer;
+function showStatus(msg, dur=3000) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => {
+    el.style.opacity = '0.4';
+    el.textContent = 'Drag any shape to compare sizes across latitudes';
+  }, dur);
+}
+
+const tooltip = document.getElementById('tooltip');
+function showTooltip(e, name, area, lat) {
+  const scale = (1/Math.cos(lat * DEG)).toFixed(2);
+  tooltip.innerHTML = `<strong>${name}</strong>${area} km²<br>lat ${lat.toFixed(1)}° · scale ${scale}×`;
+  tooltip.style.display = 'block';
+  updateTooltipPos(e);
+}
+function updateTooltipPos(e) {
+  const r = document.getElementById('map').getBoundingClientRect();
+  const x = e.originalEvent.clientX - r.left + 14;
+  const y = e.originalEvent.clientY - r.top - 10;
+  tooltip.style.left = x + 'px';
+  tooltip.style.top  = y + 'px';
+}
+function hideTooltip() { tooltip.style.display = 'none'; }
+
+// ══════════════════════════════════════════════════════════════
+//  SEARCH / AUTOCOMPLETE
+// ══════════════════════════════════════════════════════════════
+const searchInput = document.getElementById('search-input');
+const sugBox = document.getElementById('suggestions');
+
+function renderSuggestions(query) {
+  const q = query.trim().toLowerCase();
+  sugBox.innerHTML = '';
+  if (!q) { sugBox.style.display = 'none'; return; }
+
+  const continents = COUNTRY_LIST.filter(n => CONTINENT_CODES[n]);
+  const countries  = COUNTRY_LIST.filter(n => !CONTINENT_CODES[n]);
+
+  const matchCont = continents.filter(n => n.toLowerCase().includes(q));
+  const matchCoun = countries.filter(n => n.toLowerCase().startsWith(q))
+    .concat(countries.filter(n => n.toLowerCase().includes(q) && !n.toLowerCase().startsWith(q)))
+    .slice(0, 10);
+
+  const all = [...matchCont, ...matchCoun].slice(0, 12);
+  if (!all.length) { sugBox.style.display = 'none'; return; }
+
+  all.forEach(name => {
+    const isContinent = !!CONTINENT_CODES[name];
+    const color = isContinent ? '#c8a96e' : '#5b8dd9';
+    const d = document.createElement('div');
+    d.className = 'sug-item';
+    d.innerHTML = `
+      <span class="sug-dot" style="background:${color}"></span>
+      ${name}
+      <span class="sug-type">${isContinent ? 'continent' : 'country'}</span>
+    `;
+    d.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      searchInput.value = name;
+      sugBox.style.display = 'none';
+    });
+    sugBox.appendChild(d);
+  });
+  sugBox.style.display = 'block';
+}
+
+searchInput.addEventListener('input', () => renderSuggestions(searchInput.value));
+searchInput.addEventListener('blur', () => setTimeout(() => sugBox.style.display = 'none', 160));
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); doAdd(); }
+  if (e.key === 'Escape') { sugBox.style.display = 'none'; searchInput.blur(); }
+  // Arrow key nav
+  if (e.key === 'ArrowDown') {
+    const items = sugBox.querySelectorAll('.sug-item');
+    if (items.length) { e.preventDefault(); items[0].focus(); }
+  }
+});
+sugBox.addEventListener('keydown', (e) => {
+  const items = [...sugBox.querySelectorAll('.sug-item')];
+  const idx = items.indexOf(document.activeElement);
+  if (e.key === 'ArrowDown' && idx < items.length-1) items[idx+1].focus();
+  if (e.key === 'ArrowUp') { if (idx > 0) items[idx-1].focus(); else searchInput.focus(); }
+  if (e.key === 'Enter' && idx >= 0) {
+    searchInput.value = items[idx].textContent.replace(/continent|country/g,'').trim();
+    sugBox.style.display = 'none';
+    doAdd();
+  }
+});
+
+function doAdd() {
+  const val = searchInput.value.trim();
+  if (!val) return;
+  sugBox.style.display = 'none';
+  addOverlay(val);
+  searchInput.value = '';
+  searchInput.focus();
+}
+
+document.getElementById('add-btn').addEventListener('click', doAdd);
+
+document.getElementById('clear-btn').addEventListener('click', () => {
+  [...overlays].forEach(o => removeOverlay(o));
+  paletteIdx = 0;
+});
+
+// ══════════════════════════════════════════════════════════════
+//  KEYBOARD SHORTCUT: / to focus search
+// ══════════════════════════════════════════════════════════════
+document.addEventListener('keydown', (e) => {
+  if (e.key === '/' && document.activeElement !== searchInput) {
+    e.preventDefault();
+    searchInput.focus();
+    searchInput.select();
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+//  BOOT
+// ══════════════════════════════════════════════════════════════
+loadData();
+</script>
+</body>
+</html>
