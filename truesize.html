@@ -543,44 +543,81 @@ function walkCoords(coords, cb) {
   coords.forEach(c => walkCoords(c, cb));
 }
 
-// Reproject all features: translate centroid to (newLat, newLng),
-// then rescale each vertex offset to counteract Mercator distortion.
+// ── Mercator Y helpers ──────────────────────────────────────
+// The Mercator projection maps latitude φ to Y via:
+//   Y(φ) = ln( tan(π/4 + φ/2) )
+// This is non-linear — equal degree steps produce unequal Y steps,
+// growing larger toward the poles.
+//
+// To move a shape's latitude offsets correctly, we must:
+//  1. Convert each vertex lat → Mercator Y
+//  2. Measure the Y offset from the centroid in Mercator Y-space
+//  3. Rescale that Y offset by cos(φ₀)/cos(φ₁)  [the scale ratio]
+//  4. Add to the new centroid's Mercator Y
+//  5. Invert back to geographic latitude
+//
+// For longitude offsets the math is simpler — Mercator X is linear
+// in longitude, so we just scale lng offsets by cos(φ₀)/cos(φ₁).
+//
+// This is the real thetruesize.com algorithm. Without the Mercator-Y
+// roundtrip, shapes get the right width but wrong height (your bug).
+
+function mercatorY(latDeg) {
+  const φ = Math.max(-89.9, Math.min(89.9, latDeg)) * DEG;
+  return Math.log(Math.tan(Math.PI / 4 + φ / 2));
+}
+
+function mercatorYInverse(y) {
+  // Inverse: φ = 2·atan(eʸ) − π/2
+  return (2 * Math.atan(Math.exp(y)) - Math.PI / 2) / DEG;
+}
+
 function reprojectFeatures(features, origCentroid, newCentLat, newCentLng) {
   const φ0 = origCentroid.lat * DEG;
-  const φ1 = newCentLat * DEG;
+  const φ1 = Math.max(-82, Math.min(82, newCentLat)) * DEG;
 
-  // The rescale ratio: how much bigger/smaller each offset becomes
-  // cos(φ₀)/cos(φ₁):
-  //   - Moving toward poles (φ₁ > φ₀): cos decreases, ratio < 1 → shape SHRINKS
-  //   - Moving toward equator (φ₁ < φ₀): cos increases, ratio > 1 → shape GROWS
-  // This is exactly what we want: the true angular size is constant,
-  // but the Mercator rendering compensates.
-  const cosRatio = Math.cos(φ0) / Math.cos(φ1);
+  // Longitude scale ratio: cos(φ₀)/cos(φ₁)
+  // Shrinks lng offsets when moving toward poles, expands toward equator.
+  const lngRatio = Math.cos(φ0) / Math.cos(φ1);
 
-  const dLat = newCentLat - origCentroid.lat;
+  // Mercator Y of original centroid and new centroid
+  const Y0 = mercatorY(origCentroid.lat);
+  const Y1 = mercatorY(newCentLat);
+
   const dLng = newCentLng - origCentroid.lng;
 
   return features.map(f => {
-    const newCoords = transformCoords(f.geometry.coordinates, origCentroid, dLat, dLng, cosRatio);
-    return {
-      ...f,
-      geometry: { ...f.geometry, coordinates: newCoords }
-    };
+    const newCoords = transformCoords(
+      f.geometry.coordinates,
+      origCentroid, dLng, lngRatio, Y0, Y1
+    );
+    return { ...f, geometry: { ...f.geometry, coordinates: newCoords } };
   });
 }
 
-function transformCoords(coords, center, dLat, dLng, ratio) {
+function transformCoords(coords, center, dLng, lngRatio, Y0, Y1) {
   if (typeof coords[0] === 'number') {
     const [lng, lat] = coords;
-    // Offset from original centroid
-    const offLat = lat - center.lat;
+
+    // ── Longitude: linear scaling around centroid ──
     const offLng = lng - center.lng;
-    // Scale the offset by the ratio, then translate to new center
-    const newLat = (center.lat + dLat) + offLat * ratio;
-    const newLng = (center.lng + dLng) + offLng * ratio;
+    const newLng = (center.lng + dLng) + offLng * lngRatio;
+
+    // ── Latitude: Mercator-Y-space scaling ──
+    // 1. Vertex's Mercator Y
+    const Yv = mercatorY(lat);
+    // 2. Offset from centroid IN Mercator Y-space
+    const offY = Yv - Y0;
+    // 3. Scale that Y offset by the same ratio (lngRatio = cos(φ₀)/cos(φ₁))
+    //    This keeps the shape's aspect ratio correct because Mercator Y
+    //    derivative is also 1/cos(φ), matching the lng scale factor.
+    const newY = Y1 + offY * lngRatio;
+    // 4. Invert back to geographic latitude
+    const newLat = mercatorYInverse(newY);
+
     return [newLng, newLat];
   }
-  return coords.map(c => transformCoords(c, center, dLat, dLng, ratio));
+  return coords.map(c => transformCoords(c, center, dLng, lngRatio, Y0, Y1));
 }
 
 // ══════════════════════════════════════════════════════════════
